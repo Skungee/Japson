@@ -19,8 +19,9 @@ public class ServerTest {
 
 	public static void setupServer() {
 		try {
-			japson = new JapsonServer(1337);
-			japson.enableDebug();
+			japson = new JapsonServer(1337)
+					.setPassword("test-password")
+					.enableDebug();
 			japson.registerHandlers(new Handler[] {new Handler(0x01) {
 				@Override
 				public JsonObject handle(InetAddress address, int port, JsonObject object) {
@@ -59,7 +60,6 @@ public class ServerTest {
 			e.printStackTrace();
 		}
 		assertNotNull(japson);
-		System.out.println("Server started on " + japson.getAddress().getHostAddress() + ":" + japson.getPort());
 	}
 
 }

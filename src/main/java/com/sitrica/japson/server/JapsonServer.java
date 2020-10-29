@@ -18,12 +18,15 @@ import com.sitrica.japson.shared.Japson;
 
 public class JapsonServer extends Japson {
 
-	private static final ExecutorService executor = Executors.newCachedThreadPool();
-	private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+	private final ExecutorService executor = Executors.newCachedThreadPool();
 	protected final Set<Listener> listeners = new HashSet<>();
 	private final Set<Integer> ignored = new HashSet<>();
+	private final SocketHandler handler;
 
-	private long TIMEOUT = 3000L, HEARTBEAT = 1000L, DISCONNECT = 5, EXPIRY = 10; // EXPIRY in minutes, DISCONNECT is amount, and rest in milliseconds.
+	protected final InetAddress address;
+	protected final int port;
+
+	private long RECONNECT = 5, EXPIRY = 10; // EXPIRY in minutes, DISCONNECT is amount.
 	private final Connections connections;
 	private final DatagramSocket socket;
 
@@ -54,32 +57,16 @@ public class JapsonServer extends Japson {
 	}
 
 	public JapsonServer(InetAddress address, int port, Gson gson) throws SocketException {
-		super(address, port);
+		this.address = address;
+		this.port = port;
 		this.gson = gson;
-		this.socket = new DatagramSocket(port);
+		this.socket = new DatagramSocket(port, address);
+		socket.setSoTimeout(TIMEOUT);
 		connections = new Connections(this);
 		handlers.add(connections);
-		executor.execute(new SocketHandler(PACKET_SIZE, this, socket));
-		if (debug)
-			logger.atInfo().log("Started Japson server bound to %s.", address.getHostAddress() + ":" + port);
-	}
-
-	public JapsonServer setDisconnectAttempts(long disconnect) {
-		this.DISCONNECT = disconnect;
-		return this;
-	}
-
-	public Japson registerListeners(Listener... listeners) {
-		this.listeners.addAll(Sets.newHashSet(listeners));
-		return this;
-	}
-
-	public Japson registerListener(Listener listener) {
-		return registerListeners(listener);
-	}
-
-	public void addIgnoreDebugPackets(Integer... packets) {
-		ignored.addAll(Sets.newHashSet(packets));
+		handler = new SocketHandler(PACKET_SIZE, this, socket);
+		executor.execute(handler);
+		logger.atInfo().log("Started Japson server bound to %s.", address.getHostAddress() + ":" + port);
 	}
 
 	@Override
@@ -89,10 +76,39 @@ public class JapsonServer extends Japson {
 		return this;
 	}
 
+	public JapsonServer setMaxReconnectAttempts(long reconnect) {
+		this.RECONNECT = reconnect;
+		return this;
+	}
+
+	public JapsonServer registerListeners(Listener... listeners) {
+		this.listeners.addAll(Sets.newHashSet(listeners));
+		return this;
+	}
+
+	public void addIgnoreDebugPackets(Integer... packets) {
+		ignored.addAll(Sets.newHashSet(packets));
+	}
+
+	/**
+	 * The amount of minutes to wait before forgetting about a connection.
+	 * 
+	 * @param minutes Time in minutes.
+	 * @return The JapsonServer for chaining.
+	 */
+	public JapsonServer setConnectionExpiry(long minutes) {
+		this.EXPIRY = minutes;
+		return this;
+	}
+
 	@Override
 	public JapsonServer setPacketBufferSize(int buffer) {
 		this.PACKET_SIZE = buffer;
 		return this;
+	}
+
+	public Japson registerListener(Listener listener) {
+		return registerListeners(listener);
 	}
 
 	@Override
@@ -102,28 +118,7 @@ public class JapsonServer extends Japson {
 	}
 
 	@Override
-	public JapsonServer enableDebug() {
-		this.debug = true;
-		return this;
-	}
-
-	/**
-	 * The amount of minutes to wait before forgetting about a connection.
-	 * 
-	 * @param expiry time in minutes.
-	 * @return The JapsonServer for chaining.
-	 */
-	public JapsonServer setExpiryMinutes(long expiry) {
-		this.EXPIRY = expiry;
-		return this;
-	}
-
-	public JapsonServer setHeartbeat(long heartbeat) {
-		this.HEARTBEAT = heartbeat;
-		return this;
-	}
-
-	public JapsonServer setTimeout(long timeout) {
+	public JapsonServer setTimeout(int timeout) {
 		this.TIMEOUT = timeout;
 		return this;
 	}
@@ -132,8 +127,8 @@ public class JapsonServer extends Japson {
 		return Collections.unmodifiableSet(ignored);
 	}
 
-	public long getMaxDisconnectAttempts() {
-		return DISCONNECT;
+	public long getMaxReconnectAttempts() {
+		return RECONNECT;
 	}
 
 	public Connections getConnections() {
@@ -144,24 +139,46 @@ public class JapsonServer extends Japson {
 		return listeners;
 	}
 
+	public long getConnectionExpiry() {
+		return EXPIRY;
+	}
+
+	@Override
+	public JapsonServer enableDebug() {
+		this.debug = true;
+		return this;
+	}
+
 	public FluentLogger getLogger() {
 		return logger;
 	}
 
-	public long getHeartbeat() {
-		return HEARTBEAT;
+	public InetAddress getAddress() {
+		return address;
+	}
+
+	public int getPort() {
+		return port;
 	}
 
 	public long getTimeout() {
 		return TIMEOUT;
 	}
 
-	public long getExpiry() {
-		return EXPIRY;
+	public void shutdown() {
+		connections.shutdown();
+		socket.disconnect();
+		socket.close();
+		handler.stop();
+		executor.shutdown();
 	}
 
-	public void shutdown() {
-		executor.shutdown();
+	public void kill() {
+		connections.kill();
+		socket.disconnect();
+		socket.close();
+		handler.stop();
+		executor.shutdownNow();
 	}
 
 	public Gson getGson() {

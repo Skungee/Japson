@@ -12,13 +12,15 @@ public class ClientTest {
 
 	public static void setupClient() {
 		try {
-			japson = new JapsonClient(1337);
-			japson.enableDebug();
+			japson = new JapsonClient(1337)
+					.setPassword("test-password")
+					.makeSureConnectionValid()
+					.enableDebug()
+					.start();
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
 		}
 		assertNotNull(japson);
-		System.out.println("Client setup on " + japson.getAddress().getHostAddress() + ":" + japson.getPort());
 	}
 
 }

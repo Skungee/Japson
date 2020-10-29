@@ -18,10 +18,14 @@ import com.sitrica.japson.shared.ReturnablePacket;
 
 public class JapsonClient extends Japson {
 
-	private static final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+	private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
 
 	protected long HEARTBEAT = 1000L, DELAY = 1000L; // in milliseconds.
 
+	protected final InetAddress address;
+	protected final int port;
+
+	private boolean check, valid = true;
 	private final Gson gson;
 
 	public JapsonClient(int port) throws UnknownHostException {
@@ -49,31 +53,23 @@ public class JapsonClient extends Japson {
 	}
 
 	public JapsonClient(InetAddress address, int port, Gson gson) {
-		super(address, port);
+		this.address = address;
+		this.port = port;
 		this.gson = gson;
-		HeartbeatPacket packet = new HeartbeatPacket(password, port);
-		executor.scheduleAtFixedRate(() -> sendPacket(packet), DELAY, HEARTBEAT, TimeUnit.MILLISECONDS);
-		if (debug)
-			logger.atInfo().log("Started Japson client bound to %s.", address.getHostAddress() + ":" + port);
 	}
 
-	/**
-	 * The amount of milliseconds the heartbeat is set at, must match that of the JapsonClient.
-	 * 
-	 * @param heartbeat time in milliseconds.
-	 * @return The JapsonClient for chaining.
-	 */
-	public JapsonClient setHeartbeat(long heartbeat) {
-		this.HEARTBEAT = heartbeat;
+	public JapsonClient start() {
+		executor.scheduleAtFixedRate(() -> {
+			try {
+				Boolean success = sendPacket(new HeartbeatPacket(password, port));
+				if (check && success != null && success)
+					valid = true;
+			} catch (TimeoutException | InterruptedException | ExecutionException e) {
+				valid = false;
+			}
+		}, DELAY, HEARTBEAT, TimeUnit.MILLISECONDS);
+		logger.atInfo().log("Started Japson client bound to %s.", address.getHostAddress() + ":" + port);
 		return this;
-	}
-
-	public void shutdown() {
-		executor.shutdown();
-	}
-
-	public void kill() {
-		executor.shutdownNow();
 	}
 
 	@Override
@@ -95,18 +91,63 @@ public class JapsonClient extends Japson {
 		return this;
 	}
 
+	/**
+	 * The amount of milliseconds the heartbeat is set at, must match that of the JapsonClient.
+	 * 
+	 * @param heartbeat time in milliseconds.
+	 * @return The JapsonClient for chaining.
+	 */
+	public JapsonClient setHeartbeat(long heartbeat) {
+		this.HEARTBEAT = heartbeat;
+		return this;
+	}
+
+	/**
+	 * Will ensure that packets are only sent if heartbeats were successful.
+	 * 
+	 * @return The JapsonClient for chaining.
+	 */
+	public JapsonClient makeSureConnectionValid() {
+		this.check = true;
+		return this;
+	}
+
+	@Override
+	public JapsonClient setTimeout(int timeout) {
+		this.TIMEOUT = timeout;
+		return this;
+	}
+
 	@Override
 	public JapsonClient enableDebug() {
 		this.debug = true;
 		return this;
 	}
 
-	public <T> T sendPacket(ReturnablePacket<T> japsonPacket) throws TimeoutException, InterruptedException, ExecutionException {
-		return sendPacket(address, port, japsonPacket, gson);
+	public InetAddress getAddress() {
+		return address;
 	}
 
-	public void sendPacket(Packet japsonPacket) {
-		sendPacket(address, port, japsonPacket, gson);
+	public int getPort() {
+		return port;
+	}
+
+	public void shutdown() {
+		executor.shutdown();
+	}
+
+	public void kill() {
+		executor.shutdownNow();
+	}
+
+	public <T> T sendPacket(ReturnablePacket<T> packet) throws TimeoutException, InterruptedException, ExecutionException {
+		if (check && !valid && !(packet instanceof HeartbeatPacket))
+			throw new TimeoutException("No connection to the server. Cancelling sending packet.");
+		return super.sendPacket(address, port, packet, gson);
+	}
+
+	public void sendPacket(Packet packet) throws InterruptedException, ExecutionException, TimeoutException {
+		super.sendPacket(address, port, packet, gson);
 	}
 
 }
